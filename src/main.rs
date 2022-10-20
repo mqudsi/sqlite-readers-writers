@@ -86,7 +86,7 @@ INSERT INTO "kv" VALUES (?1, ?2);
             let (key, value) = (rng.get_u16(), rng.get_u16());
             keys.push(key);
             query
-                .execute(&[key, value])
+                .execute(params![key, value])
                 .expect("Insertion failure seeding database!");
         }
 
