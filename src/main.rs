@@ -113,7 +113,7 @@ LIMIT 1;"#,
         .expect("Failed to prepare query statement");
 
     let mut rng = FastRng::new();
-    while !stop.load(Ordering::Acquire) {
+    while !stop.load(Ordering::Relaxed) {
         let key_index = rng.get_usize() % keys.len();
         let key = &keys[key_index as usize];
 
@@ -153,7 +153,7 @@ VALUES (?1, ?2)
     value.resize(NEW_ITEM_SIZE, 0u8);
     rng.fill_bytes(&mut value);
 
-    while !stop.load(Ordering::Acquire) {
+    while !stop.load(Ordering::Relaxed) {
         let key = rng.get_u16();
 
         let timer = Instant::now();
