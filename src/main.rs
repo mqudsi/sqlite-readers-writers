@@ -224,19 +224,19 @@ fn main() {
             total_writes += writes;
         }
 
-        eprintln!("{} writers:", writers);
-        eprintln!("- Read {} values from the database.", read_times.len());
-        eprintln!("- Wrote {} values to the database.", total_writes);
-        eprintln!(
+        println!("{} writers:", writers);
+        println!("- Read {} values from the database.", read_times.len());
+        println!("- Wrote {} values to the database.", total_writes);
+        println!(
             "- Mean read time: {:.5} ms",
             average(&read_times) / 1000_000f64
         );
         let p95_nanos = read_times[(0.95 * (read_times.len() as f64)) as usize];
-        eprintln!("- P95: {} ms", p95_nanos as f64 / 1000_000f64);
+        println!("- P95: {} ms", p95_nanos as f64 / 1000_000f64);
         let p99_nanos = read_times[(0.99 * (read_times.len() as f64)) as usize];
-        eprintln!("- P99: {} ms", p99_nanos as f64 / 1000_000f64);
+        println!("- P99: {} ms", p99_nanos as f64 / 1000_000f64);
         let p99_9_nanos = read_times[(0.999 * (read_times.len() as f64)) as usize];
-        eprintln!("- P99.9: {} ms", p99_9_nanos as f64 / 1000_000f64);
-        eprintln!("");
+        println!("- P99.9: {} ms", p99_9_nanos as f64 / 1000_000f64);
+        println!("");
     }
 }
