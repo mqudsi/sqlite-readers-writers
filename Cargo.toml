@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 random-fast-rng = "0.1.1"
-rusqlite = "0.28.0"
+rusqlite = { version = "0.28.0", features = [ "bundled", "unlock_notify" ] }

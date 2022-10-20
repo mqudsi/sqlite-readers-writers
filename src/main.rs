@@ -7,7 +7,6 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const USE_WAL: bool = true;
 const USE_RWLOCK: bool = false;
 const SEED_COUNT: usize = 20;
 const NEW_ITEM_SIZE: usize = 40 * 1024;
@@ -20,33 +19,54 @@ struct Database {
     conn: rusqlite::Connection,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct DbOptions {
+    wal: bool,
+    shared_cache: bool,
+}
+
+impl DbOptions {
+    fn db_flags(&self) -> rusqlite::OpenFlags {
+        use rusqlite::OpenFlags;
+
+        let mut flags = OpenFlags::empty();
+        flags.set(OpenFlags::SQLITE_OPEN_CREATE, true);
+        flags.set(OpenFlags::SQLITE_OPEN_READ_WRITE, true);
+        flags.set(OpenFlags::SQLITE_OPEN_SHARED_CACHE, self.shared_cache);
+
+        flags
+    }
+}
+
 impl Database {
-    pub fn create<P: AsRef<Path>>(path: P) -> Self {
+    pub fn create<P: AsRef<Path>>(path: P, options: &DbOptions) -> Self {
         let path: &Path = path.as_ref();
         if path.exists() {
             fs::remove_file(path).expect("Could not delete existing database file");
         }
 
-        let mut db = Self::open(path);
-        db.create_tables();
+        let mut db = Self::open(path, options);
+        db.create_tables(options);
 
         db
     }
 
-    pub fn open<P: AsRef<Path>>(path: P) -> Self {
-        let conn = Connection::open(path).expect("Could not create SQLite connection");
+    pub fn open<P: AsRef<Path>>(path: P, options: &DbOptions) -> Self {
+        let conn = Connection::open_with_flags(path, options.db_flags())
+            .expect("Could not create SQLite connection");
         conn.busy_timeout(DB_TIMEOUT)
             .expect("Error setting the database timeout");
 
         Database { conn }
     }
 
-    fn create_tables(&mut self) {
-        if USE_WAL {
+    fn create_tables(&mut self, options: &DbOptions) {
+        if options.wal {
             self.conn
                 .pragma_update(None, "journal_mode", &"WAL".to_owned())
                 .expect("Error applying WAL journal_mode");
         }
+
         self.conn
             .execute(
                 r#"
@@ -56,7 +76,7 @@ CREATE TABLE "kv" (
 	PRIMARY KEY("key")
 ) WITHOUT ROWID;
 "#,
-                params![],
+                [],
             )
             .expect("Error creating tables");
     }
@@ -180,63 +200,77 @@ fn average(nums: &[i64]) -> f64 {
 }
 
 fn main() {
-    let keys = {
-        let mut db = Database::create("test.db");
-        db.seed().expect("Error seeding database!")
-    };
 
-    for writers in 0..4 {
-        let done = Arc::new(AtomicBool::new(false));
-        let rwlock = Arc::new(RwLock::new(()));
-
-        {
-            let done = done.clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(5));
-                done.store(true, Ordering::Release);
-            });
-        }
-
-        let db = Database::open("test.db");
-        let (write_counts_send, write_counts_recv) = mpsc::channel();
-        for _ in 0..writers {
-            let done = done.clone();
-            let sender = write_counts_send.clone();
-            let rwlock = rwlock.clone();
-            thread::spawn(move || {
-                let write_db = Database::open("test.db");
-                let write_times = write_loop(write_db, done, rwlock);
-                sender
-                    .send(write_times.len())
-                    .expect("Could not send write count!");
-            });
-        }
-        drop(write_counts_send);
-
-        let mut read_times = read_loop(db, &keys, done.clone(), rwlock.clone());
-        read_times.sort();
-
-        let mut total_writes = 0;
-        for _ in 0..writers {
-            let writes = write_counts_recv
-                .recv()
-                .expect("Failed to receive write counts!");
-            total_writes += writes;
-        }
-
-        println!("{} writers:", writers);
-        println!("- Read {} values from the database.", read_times.len());
-        println!("- Wrote {} values to the database.", total_writes);
-        println!(
-            "- Mean read time: {:.5} ms",
-            average(&read_times) / 1000_000f64
-        );
-        let p95_nanos = read_times[(0.95 * (read_times.len() as f64)) as usize];
-        println!("- P95: {} ms", p95_nanos as f64 / 1000_000f64);
-        let p99_nanos = read_times[(0.99 * (read_times.len() as f64)) as usize];
-        println!("- P99: {} ms", p99_nanos as f64 / 1000_000f64);
-        let p99_9_nanos = read_times[(0.999 * (read_times.len() as f64)) as usize];
-        println!("- P99.9: {} ms", p99_9_nanos as f64 / 1000_000f64);
+    for options in [
+        DbOptions { shared_cache: false, wal: false },
+        DbOptions { shared_cache: false, wal: true },
+        // Shared cache w/out wal requires unlock_notify to work
+        DbOptions { shared_cache: true, wal: false },
+        DbOptions { shared_cache: true, wal: true },
+    ] {
+        println!("## {:?}", options);
         println!("");
+
+        let keys = {
+            let mut db = Database::create("test.db", &options);
+            db.seed().expect("Error seeding database!")
+        };
+
+        for writers in 0..4 {
+            let done = Arc::new(AtomicBool::new(false));
+            let rwlock = Arc::new(RwLock::new(()));
+            let options = Arc::new(options);
+
+            {
+                let done = done.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_secs(5));
+                    done.store(true, Ordering::Release);
+                });
+            }
+
+            let db = Database::open("test.db", &options);
+            let (write_counts_send, write_counts_recv) = mpsc::channel();
+            for _ in 0..writers {
+                let done = done.clone();
+                let sender = write_counts_send.clone();
+                let rwlock = rwlock.clone();
+                let options = options.clone();
+                thread::spawn(move || {
+                    let write_db = Database::open("test.db", &options);
+                    let write_times = write_loop(write_db, done, rwlock);
+                    sender
+                        .send(write_times.len())
+                        .expect("Could not send write count!");
+                });
+            }
+            drop(write_counts_send);
+
+            let mut read_times = read_loop(db, &keys, done.clone(), rwlock.clone());
+            read_times.sort();
+
+            let mut total_writes = 0;
+            for _ in 0..writers {
+                let writes = write_counts_recv
+                    .recv()
+                    .expect("Failed to receive write counts!");
+                total_writes += writes;
+            }
+
+            println!("{} writers:", writers);
+            println!("- Read {} values from the database.", read_times.len());
+            println!("- Wrote {} values to the database.", total_writes);
+            println!(
+                "- Mean read time: {:.5} ms",
+                average(&read_times) / 1000_000f64
+            );
+            let p95_nanos = read_times[(0.95 * (read_times.len() as f64)) as usize];
+            println!("- P95: {} ms", p95_nanos as f64 / 1000_000f64);
+            let p99_nanos = read_times[(0.99 * (read_times.len() as f64)) as usize];
+            println!("- P99: {} ms", p99_nanos as f64 / 1000_000f64);
+            let p99_9_nanos = read_times[(0.999 * (read_times.len() as f64)) as usize];
+            println!("- P99.9: {} ms", p99_9_nanos as f64 / 1000_000f64);
+            println!("");
+        }
     }
 }
