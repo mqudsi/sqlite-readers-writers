@@ -327,7 +327,7 @@ fn main() {
     println!("| configuration | readers | writers | reads/sec | writes/sec | read p95 (ms) | read p99 | read p99.9 | write p95 | write p99 | write p99.9 |");
     println!("| ------------- | ------- | ------- | --------- | ---------- | ------------- | -------- | ---------- | --------- | --------- | ----------- |");
     for row in perf_vec {
-        println!("| {:w0$} | {:2} | {:2} | {:>8.1} | {:>3.1} | {:>3.4} | {:>3.4} | {:>3.4} | {:>3.4} | {:>3.4} | {:>4.4} |",
+        println!("| {:w0$} | {:2} | {:2} | {} | {} | {} | {} | {} | {} | {} | {} |",
             row.config, row.readers, row.writers, row.reads_per_sec, row.writes_per_sec,
             row.read_p95, row.read_p99, row.read_p999,
             print_or(row.write_p95, "N/A"), print_or(row.write_p99, "N/A"), print_or(row.write_p999, "N/A"),
